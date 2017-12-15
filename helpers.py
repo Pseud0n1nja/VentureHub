@@ -287,6 +287,7 @@ def train_the_model(R_indices, R, train_R_indices, train_R, BATCH_SIZE,
     batch = Batch(train_R_indices, train_R, BATCH_SIZE=BATCH_SIZE)
     _loss, _reg, batch_no = 0, 0, 0
     mae_train_arr, mae_cv_arr , mae_test_arr, loss_arr = [], [], [], []
+    best_mae = np.inf
     
     if 'out.txt' in os.listdir(): 
         os.remove('out.txt')
@@ -295,16 +296,20 @@ def train_the_model(R_indices, R, train_R_indices, train_R, BATCH_SIZE,
                                             NUM_EPOCHS, LAMBDA, k, lr, n_batches, BATCH_SIZE)
     f_out.write(dp)
     print(dp)
+    
+    # Add ops to save and restore all the variables.
+    saver = tf.train.Saver()
+    
     print('start SGD iterations...')
+    
     with tf.Session() as sess:
         sess.run(init)
         epoch_end = time.time()
-        while not (batch.epoch==NUM_EPOCHS and batch.last_batch==True):
+        while not (batch.epoch == NUM_EPOCHS and batch.last_batch == True):
             batch_R_indices, batch_R = batch.next()
             if not batch.broken:
                 batch_no += 1
-                # _bl: batch loss
-                # _br: batch regularization term
+                # _bl: batch loss, _br: batch regularization term
                 
                 _, _bl, _br = sess.run([train, loss, reg], 
                                         feed_dict={R_indices: batch_R_indices, R: batch_R})
@@ -333,7 +338,7 @@ def train_the_model(R_indices, R, train_R_indices, train_R, BATCH_SIZE,
                 dp = '\nmae_train: %6.4f, **mae_cv: %6.4f**, mae_test: %6.4f,  mean(preds_cv): %6.4f' % \
                       (_mae_train, _mae_cv, _mae_test, np.mean(preds_cv))
                 f_out.write(dp)
-                print(dp)
+                print(dp, end = '')
                 
                 #dp = '(_reg/_loss) fraction: %6.4f' % (_reg/_loss)
                 #f_out.write(dp)
@@ -345,10 +350,18 @@ def train_the_model(R_indices, R, train_R_indices, train_R, BATCH_SIZE,
                 
                 epoch_end = time.time()
                 
+                # Save tf.variables U and V if mae_cv has reached a minimum.
+                if (mae_cv_arr[-1] < best_mae):
+                    best_mae = mae_cv_arr[-1]
+                    save_path = saver.save(sess, "data/model.ckpt")
+                    print(', CHECKPOINT!! {:6.4f}'.format(_mae_cv), end='')
+                
+                print()
+                
     f_out.close()
     return mae_train_arr, mae_cv_arr, mae_test_arr, loss_arr, mean_preds, n_batches, preds_cv, preds_test, \
            _U, _V, _X_UV
-
-# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # 
-# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # 
-
+    
+    
+    
+    

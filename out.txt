@@ -1,0 +1,16 @@
+NUM_EPOCHS: 10
+LAMBDA: 0.0
+k: 10
+lr: 0.01
+n_batches: 1329
+BATCH_SIZE: 1024
+mae_train: 0.2191, **mae_cv: 0.2454**, mae_test: 0.2450,  mean(preds_cv): 0.2768
+mae_train: 0.1365, **mae_cv: 0.2229**, mae_test: 0.2227,  mean(preds_cv): 0.2540
+mae_train: 0.0552, **mae_cv: 0.1554**, mae_test: 0.1552,  mean(preds_cv): 0.1699
+mae_train: 0.0417, **mae_cv: 0.1566**, mae_test: 0.1564,  mean(preds_cv): 0.1672
+mae_train: 0.0477, **mae_cv: 0.1812**, mae_test: 0.1804,  mean(preds_cv): 0.2010
+mae_train: 0.0446, **mae_cv: 0.1856**, mae_test: 0.1851,  mean(preds_cv): 0.2059
+mae_train: 0.0378, **mae_cv: 0.1817**, mae_test: 0.1810,  mean(preds_cv): 0.2018
+mae_train: 0.0398, **mae_cv: 0.1908**, mae_test: 0.1906,  mean(preds_cv): 0.2114
+mae_train: 0.0326, **mae_cv: 0.1824**, mae_test: 0.1817,  mean(preds_cv): 0.2021
+mae_train: 0.0251, **mae_cv: 0.1650**, mae_test: 0.1641,  mean(preds_cv): 0.1817
