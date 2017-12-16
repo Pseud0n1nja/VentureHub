@@ -10,11 +10,12 @@ from matplotlib.ticker import MaxNLocator
 # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # 
 # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # 
 
-def return_ROC_statistics(y_pred, y_true, threshold=np.linspace(0,1,51)):
+def return_ROC_statistics(y_pred, y_true, threshold=np.linspace(0,1,26)):
     recall, fpr, accuracy, precision = [], [], [], [] 
     
     if not hasattr(threshold, '__iter__'):
         threshold = [threshold]
+        
         
     for t in threshold:
         y_pred_01  = threshold_rounder(y_pred, threshold=t)
@@ -33,8 +34,8 @@ def return_ROC_statistics(y_pred, y_true, threshold=np.linspace(0,1,51)):
 
 def threshold_rounder(y_pred_test, threshold=0.5):
     y_pred_test_01 = np.zeros_like(y_pred_test)
-    y_pred_test_01[y_pred_test > threshold] = 1
-    y_pred_test_01[y_pred_test <= threshold] = 0
+    y_pred_test_01[y_pred_test >= threshold] = 1
+    y_pred_test_01[y_pred_test < threshold] = 0
 
     return y_pred_test_01
 
@@ -50,7 +51,7 @@ def confusion_matrix(y_true, y_pred):
     tn = len(b) - sum(b)
     fn = len(a) - sum(a)
     
-    accuracy  = (tp+tn)/ float(tp+tn+fp+fn)
+    accuracy  = (tp+tn)/float(tp+tn+fp+fn)
     recall    = tp/float(tp+fn)
     precision = tp/float(tp+fp)
     f1_score  = 2*precision*recall/float(precision + recall)
@@ -84,7 +85,7 @@ def plotter(mae_train_arr, mae_cv_arr, mae_test_arr, loss_arr, BATCH_SIZE):
     ax1.set_xlim(left=1);
     #ax1.set_ylim(0.5, 0.65)
     i_min = np.argmin(mae_cv_arr)
-    ax1.set_title('MAE_cv: {:6.4f}, BATCH_SIZE: {}*1024'.format(mae_cv_arr[i_min], BATCH_SIZE//1024))
+    ax1.set_title('MAE_cv: {:6.4f}, BATCH_SIZE: {}*256'.format(mae_cv_arr[i_min], BATCH_SIZE//256))
     ax1.legend(['test', 'cv', 'train'])
     ax2.plot(range(1, n_epoch+1), loss_arr, 'kd-', alpha=.6);
     
@@ -154,7 +155,7 @@ class Batch(object):
             # reset the counter. 
             self.i0 = 0
             self.i1 = self.i0 + self.BATCH_SIZE
-            print('Epoch %d %s' % (self.epoch, '*'*30))
+            print('Epoch %d %s' % (self.epoch, '_'*73))
         else:
             self.i0 = self.i0 + self.BATCH_SIZE
             self.i1 = min(self.i0 + self.BATCH_SIZE, len(self.R_values))
@@ -169,7 +170,7 @@ class Batch(object):
 # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # 
 # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # 
 
-def evaluate_preds_n_mae(sess, cv_R, cv_R_indices, R_pred, R_indices, R, BATCH_SIZE):
+def evaluate_preds_and_mae(sess, cv_R, cv_R_indices, R_pred, R_indices, R, BATCH_SIZE):
     i0 = (-1) * BATCH_SIZE
     i1 = 0
     preds = np.zeros((len(cv_R) // BATCH_SIZE) * BATCH_SIZE)
@@ -227,7 +228,7 @@ def get_stacked_UV(R_indices, R, U, V, k, BATCH_SIZE):
 # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # 
 # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # 
 
-def construct_graph(LAMBDA=0, k=10, lr=0.001, BATCH_SIZE=1024*16, n_users=138493, n_movies=27278, cui = 0.1):
+def construct_graph(LAMBDA=0, k=10, lr=0.001, BATCH_SIZE=256, n_users=138493, n_movies=27278, cui = 0.1):
 
     R = tf.placeholder(dtype=tf.float32, shape=(BATCH_SIZE,))
     R_indices = tf.placeholder(dtype=tf.int32, shape=(BATCH_SIZE,2))
@@ -278,9 +279,8 @@ def construct_graph(LAMBDA=0, k=10, lr=0.001, BATCH_SIZE=1024*16, n_users=138493
 
 def train_the_model(R_indices, R, train_R_indices, train_R, BATCH_SIZE, 
                NUM_EPOCHS, LAMBDA, k, lr, 
-               train, loss, reg, U, V, R_pred,
-               cv_R, cv_R_indices, test_R, test_R_indices,
-               X_UV):
+               train, loss, reg, U, V, X_UV, R_pred,
+               cv_R, cv_R_indices, test_R, test_R_indices):
     start = time.time()
     n_batches = len(train_R) // BATCH_SIZE
     init = tf.global_variables_initializer()
@@ -320,13 +320,10 @@ def train_the_model(R_indices, R, train_R_indices, train_R, BATCH_SIZE,
                         batch_no, _loss/batch_no, time.time()-epoch_end), end='\r') 
             
             if batch.last_batch: 
-                # fetch the state of U, V matrices at current epoch
-                _U, _V = sess.run([U, V])
-                _X_UV= sess.run([X_UV])
                 # fetch the mae's
-                _, _mae_train = evaluate_preds_n_mae(sess, train_R, train_R_indices, R_pred, R_indices, R, BATCH_SIZE)
-                preds_cv, _mae_cv = evaluate_preds_n_mae(sess, cv_R, cv_R_indices, R_pred, R_indices, R, BATCH_SIZE)
-                preds_test, _mae_test = evaluate_preds_n_mae(sess, test_R, test_R_indices, R_pred, R_indices, R, BATCH_SIZE)
+                _, _mae_train = evaluate_preds_and_mae(sess, train_R, train_R_indices, R_pred, R_indices, R, BATCH_SIZE)
+                preds_cv, _mae_cv = evaluate_preds_and_mae(sess, cv_R, cv_R_indices, R_pred, R_indices, R, BATCH_SIZE)
+                preds_test, _mae_test = evaluate_preds_and_mae(sess, test_R, test_R_indices, R_pred, R_indices, R, BATCH_SIZE)
                 
                 mae_train_arr.append(_mae_train)
                 mae_cv_arr.append(_mae_cv)
@@ -353,14 +350,12 @@ def train_the_model(R_indices, R, train_R_indices, train_R, BATCH_SIZE,
                 # Save tf.variables U and V if mae_cv has reached a minimum.
                 if (mae_cv_arr[-1] < best_mae):
                     best_mae = mae_cv_arr[-1]
-                    save_path = saver.save(sess, "data/model.ckpt")
-                    print(', CHECKPOINT!! {:6.4f}'.format(_mae_cv), end='')
-                
+                    save_path = saver.save(sess, "saved_models/best_model.ckpt")
+                    print(',  CHECKPOINT!! {:6.4f}'.format(_mae_cv), end='')
                 print()
                 
     f_out.close()
-    return mae_train_arr, mae_cv_arr, mae_test_arr, loss_arr, mean_preds, n_batches, preds_cv, preds_test, \
-           _U, _V, _X_UV
+    return mae_train_arr, mae_cv_arr, mae_test_arr, loss_arr
     
     
     
