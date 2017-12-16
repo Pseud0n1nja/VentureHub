@@ -6,12 +6,13 @@ import time
 import os
 import matplotlib.pylab as pylab
 from matplotlib.ticker import MaxNLocator
+from sklearn.metrics import precision_recall_fscore_support as prf_score
 
 # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # 
 # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # 
 
 def return_ROC_statistics(y_pred, y_true, threshold=np.linspace(0,1,26)):
-    recall, fpr, accuracy, precision = [], [], [], [] 
+    recall, f1, fpr, accuracy, precision = [], [], [], [], []
     
     if not hasattr(threshold, '__iter__'):
         threshold = [threshold]
@@ -20,14 +21,18 @@ def return_ROC_statistics(y_pred, y_true, threshold=np.linspace(0,1,26)):
     for t in threshold:
         y_pred_01  = threshold_rounder(y_pred, threshold=t)
         
-        acc_, pre_, rec_, f1_, fpr_ = confusion_matrix(y_true, y_pred_01)
+        acc_, pre_, rec_, f1_, fpr_ = confusion_matrix(y_true[:len(y_pred)], y_pred_01)
         
         accuracy.append(acc_)
         precision.append(pre_)
         recall.append(rec_)
+        f1.append(f1_)
         fpr.append(fpr_)
         
-    return y_pred_01, accuracy, precision, recall, fpr
+    if len(threshold) == 1:
+        return y_pred_01, acc_, pre_, rec_, f1_, fpr_
+    else:
+        return y_pred_01, accuracy, precision, recall, f1, fpr
 
 # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # 
 # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # 
@@ -43,6 +48,8 @@ def threshold_rounder(y_pred_test, threshold=0.5):
 # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # 
 
 def confusion_matrix(y_true, y_pred):
+    y_true = y_true[:len(y_pred)]
+    
     a = y_pred[y_true == 1]
     b = y_pred[y_true == 0]
     
@@ -287,7 +294,8 @@ def train_the_model(R_indices, R, train_R_indices, train_R, BATCH_SIZE,
     batch = Batch(train_R_indices, train_R, BATCH_SIZE=BATCH_SIZE)
     _loss, _reg, batch_no = 0, 0, 0
     mae_train_arr, mae_cv_arr , mae_test_arr, loss_arr = [], [], [], []
-    best_mae = np.inf
+
+    best_save_score = -np.inf
     
     if 'out.txt' in os.listdir(): 
         os.remove('out.txt')
@@ -325,6 +333,8 @@ def train_the_model(R_indices, R, train_R_indices, train_R, BATCH_SIZE,
                 preds_cv, _mae_cv = evaluate_preds_and_mae(sess, cv_R, cv_R_indices, R_pred, R_indices, R, BATCH_SIZE)
                 preds_test, _mae_test = evaluate_preds_and_mae(sess, test_R, test_R_indices, R_pred, R_indices, R, BATCH_SIZE)
                 
+                _, _, _precision_cv, _recall_cv, _f1_cv, _ = return_ROC_statistics(preds_cv, cv_R, threshold=.5)
+                
                 mae_train_arr.append(_mae_train)
                 mae_cv_arr.append(_mae_cv)
                 mae_test_arr.append(_mae_test)
@@ -347,11 +357,14 @@ def train_the_model(R_indices, R, train_R_indices, train_R, BATCH_SIZE,
                 
                 epoch_end = time.time()
                 
-                # Save tf.variables U and V if mae_cv has reached a minimum.
-                if (mae_cv_arr[-1] < best_mae):
-                    best_mae = mae_cv_arr[-1]
+                # Save model if recall_cv has reached a minimum.
+                
+                if (_f1_cv > best_save_score):
+                    best_save_score = _f1_cv
                     save_path = saver.save(sess, "saved_models/best_model.ckpt")
-                    print(',  CHECKPOINT!! {:6.4f}'.format(_mae_cv), end='')
+                    print(',  CHECKPOINT!! f1_score:{:6.4f}'.format(_f1_cv), end='')
+                else: 
+                    print(',  f1:{:6.4f}'.format(_f1_cv), end='')
                 print()
                 
     f_out.close()
