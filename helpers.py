@@ -326,12 +326,18 @@ def train_the_model(R_indices, R, train_R_indices, train_R, BATCH_SIZE,
             
             if batch.last_batch:  
                 # fetch the mae's
+                print('\nEvaluating MAE on training set...', end='\r')
                 _, _mae_train = evaluate_preds_and_mae(sess, train_R, train_R_indices, R_pred, R_indices, R, BATCH_SIZE)
+                print('Evaluating MAE on cv set...        ', end='\r')
                 preds_cv, _mae_cv = evaluate_preds_and_mae(sess, cv_R, cv_R_indices, R_pred, R_indices, R, BATCH_SIZE)
+                print('Evaluating MAE on test set...       ', end='\r')
                 preds_test, _mae_test = evaluate_preds_and_mae(sess, test_R, test_R_indices, R_pred, R_indices, R, BATCH_SIZE)
                 
+                # threshold=0.7 <== an important parameter !!!
+                print('Calculating ROC curve              ', end='\r')
                 _, _, _precision_cv, _recall_cv, _f1_score_cv, _ = return_ROC_statistics(preds_cv, cv_R, threshold=.7)
-                
+                print('                                   ', end='\r')
+
                 mae_train_arr.append(_mae_train)
                 mae_cv_arr.append(_mae_cv)
                 mae_test_arr.append(_mae_test)
