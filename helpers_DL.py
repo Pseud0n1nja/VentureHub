@@ -141,7 +141,7 @@ def shuffler(a,b):
 # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # 
 
 class Batch(object):
-    def __init__(self, R_indices, R, BATCH_SIZE):
+    def __init__(self, R_indices, R, n_investors, n_input, BATCH_SIZE):
         self.R_indices = R_indices
         self.R = R
         self.BATCH_SIZE = BATCH_SIZE
@@ -150,6 +150,8 @@ class Batch(object):
         self.epoch = 0
         self.broken = False
         self.last_batch = False
+        self.n_investors = n_investors
+        self.n_input = n_input
 
     def next(self):
         if self.i1 >= len(self.R):
@@ -160,30 +162,41 @@ class Batch(object):
             # reset the counter. 
             self.i0 = 0
             self.i1 = self.i0 + self.BATCH_SIZE
-            print('Epoch %d %s' % (self.epoch, '_'*73))
+            #print('Epoch %d %s' % (self.epoch, '_'*73))
         else:
             self.i0 = self.i0 + self.BATCH_SIZE
             self.i1 = min(self.i0 + self.BATCH_SIZE, len(self.R))
-            if self.i1 - self.i0 < self.BATCH_SIZE:
-                # broken batch.
-                self.broken = True
             if self.i1 == len(self.R):
                 self.last_batch = True
-        #
-        return self.R_indices[self.i0:self.i1], self.R[self.i0:self.i1]
+            if self.i1 - self.i0 < self.BATCH_SIZE:
+                self.broken = True
+                return None, None
+            
+
+        X = np.zeros((self.BATCH_SIZE, self.n_input))
+        X[np.arange(self.BATCH_SIZE), self.R_indices[self.i0:self.i1, 0]] = 1
+        X[np.arange(self.BATCH_SIZE), self.n_investors + self.R_indices[self.i0:self.i1, 1]] = 1
+        y = self.R[self.i0:self.i1].reshape(self.BATCH_SIZE,1)
+
+        # add number of affiliations between investor and startup
+        X[np.arange(self.BATCH_SIZE), -1*np.ones(self.BATCH_SIZE).astype(np.int64)] = 0
+        
+        return X, y
 
 # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # 
 # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # 
 
-def evaluate_preds_and_mae(sess, cv_R, cv_R_indices, R_pred, R_indices, R, BATCH_SIZE):
+def evaluate_preds_and_mae(sess, cv_R, cv_R_indices, n_investors, n_input, y_pred, X, y, BATCH_SIZE):     
+    batch = Batch(cv_R_indices, cv_R, n_investors, n_input, BATCH_SIZE=BATCH_SIZE) 
+    preds = np.zeros((len(cv_R) // BATCH_SIZE) * BATCH_SIZE)
     i0 = (-1) * BATCH_SIZE
     i1 = 0
-    preds = np.zeros((len(cv_R) // BATCH_SIZE) * BATCH_SIZE)
     for step in range(len(cv_R) // BATCH_SIZE):
+        batch_X, batch_y = batch.next()
         i0 = i0 + BATCH_SIZE
         i1 = i0 + BATCH_SIZE
-        preds[i0:i1] = sess.run(R_pred, feed_dict={R_indices: cv_R_indices[i0:i1], R: cv_R[i0:i1]})
-
+        preds[i0:i1] = sess.run(y_pred, feed_dict={X: batch_X, y: batch_y})[:,0]
+        
     mae = np.mean(np.abs(cv_R[:i1] - preds))
     
     return preds, mae
@@ -191,145 +204,96 @@ def evaluate_preds_and_mae(sess, cv_R, cv_R_indices, R_pred, R_indices, R, BATCH
 # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # 
 # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # 
 
-def npy_read_data():
-    print('Reading train_*.npy , cv_*.npy , test_*.npy files....')
+def construct_graph(LAMBDA=0, lr=0.001, BATCH_SIZE=256, n_input=106603):
     
-    with open('data/train_R_indices.npy', 'rb') as f:
-        train_R_indices = np.load(f)
-    with open('data/train_R.npy', 'rb') as f:
-        train_R = np.load(f)
+    X = tf.placeholder(dtype=tf.float32, shape=(BATCH_SIZE, n_input))
+    y = tf.placeholder(dtype=tf.float32, shape=(BATCH_SIZE, 1))
+    
+    # Define layer weights as tf.Variable
+    n_hidden_1, n_hidden_2 = 100, 100 
+    
+    
+    weights = {
+        'h1': tf.Variable(tf.truncated_normal(shape=(n_input, n_hidden_1), mean=np.sqrt(0), stddev=0.2), dtype=tf.float32),
+        'h2': tf.Variable(tf.truncated_normal(shape=(n_hidden_1, n_hidden_2), mean=np.sqrt(0), stddev=0.2), dtype=tf.float32),
+        'out': tf.Variable(tf.truncated_normal(shape=(n_hidden_2, 1), mean=np.sqrt(0), stddev=0.2), dtype=tf.float32) }
+    
+    biases = {
+        'b1': tf.Variable(tf.truncated_normal(shape=(n_hidden_1,), mean=np.sqrt(0), stddev=0.2), dtype=tf.float32),
+        'b2': tf.Variable(tf.truncated_normal(shape=(n_hidden_2,), mean=np.sqrt(0), stddev=0.2), dtype=tf.float32),
+        'out': tf.Variable(tf.truncated_normal(shape=(1,), mean=np.sqrt(0), stddev=0.2), dtype=tf.float32) }
+    # ..............................................................................................................
+    # Add Hidden Layer 1
+    layer_1 = tf.add(tf.matmul(X, weights['h1']), biases['b1'])
+    layer_1 = tf.tanh(layer_1)
 
-    with open('data/cv_R_indices.npy', 'rb') as f:
-        cv_R_indices = np.load(f)
-    with open('data/cv_R.npy', 'rb') as f:
-        cv_R = np.load(f)
+    # Add Hidden Layer n
+    layer_n = tf.add(tf.matmul(layer_1, weights['h2']), biases['b2'])
+    layer_n = tf.tanh(layer_n)
 
-    with open('data/test_R_indices.npy', 'rb') as f:
-        test_R_indices = np.load(f)
-    with open('data/test_R.npy', 'rb') as f:
-        test_R = np.load(f)
+    # Output Layer
+    logits = tf.matmul(layer_n, weights['out']) + biases['out']    
+    y_pred = tf.sigmoid(logits)
+    # Define loss and optimizer
+    loss = tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(logits=logits, labels=y))
+    optimizer = tf.train.AdamOptimizer(learning_rate=lr)
+    train = optimizer.minimize(loss)
 
-    return train_R_indices, train_R, cv_R_indices, cv_R, test_R_indices, test_R
+    return train, loss, X, y, y_pred
 
 # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # 
 # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # 
 
-def get_stacked_UV(R_indices, R, U, V, k, BATCH_SIZE):
-    u_idx = R_indices[:,0]
-    v_idx = R_indices[:,1]
-    rows_U = tf.transpose(np.ones((k,1), dtype=np.int32)*u_idx)
-    rows_V = tf.transpose(np.ones((k,1), dtype=np.int32)*v_idx)
-    cols = np.arange(k, dtype=np.int32).reshape((1,-1))
-    cols = tf.tile(cols, [BATCH_SIZE,1])
-
-    indices_U = tf.stack([rows_U, cols], -1)
-    indices_V = tf.stack([rows_V, cols], -1)
-    stacked_U = tf.gather_nd(U, indices_U)
-    stacked_V = tf.gather_nd(V, indices_V)
-    # .....................................
-        
-    return stacked_U, stacked_V
-
-# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # 
-# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # 
-
-def construct_graph(LAMBDA=0, k=10, lr=0.001, BATCH_SIZE=256, n_investors=41838, n_startups=64764, cui=0.1):
-
-    R_indices = tf.placeholder(dtype=tf.int32, shape=(BATCH_SIZE,2))
-    R = tf.placeholder(dtype=tf.float32, shape=(BATCH_SIZE,))
+def train_the_model(train_R_indices, train_R, cv_R_indices, cv_R, test_R_indices, test_R,
+               BATCH_SIZE, NUM_EPOCHS, LAMBDA, lr, 
+               train, loss, X, y, y_pred,
+               n_investors, n_input):
     
-    # initialization of U and V is critical. 
-    # set mean=np.sqrt(mu/k), where mu ~ 3 or 3.5
-    U = tf.Variable(tf.truncated_normal(shape=(n_investors,k), mean=np.sqrt(3.5/k), stddev=0.2), dtype=tf.float32)
-    V = tf.Variable(tf.truncated_normal(shape=(n_startups,k), mean=np.sqrt(3.5/k), stddev=0.2), dtype=tf.float32)
-
-    # weights for cross-features
-    X_UV = tf.Variable(tf.truncated_normal(shape=(k,k), mean=0, stddev=0.2), dtype=tf.float32)
-    
-    #.............................................. 
-    
-    stacked_U, stacked_V = get_stacked_UV(R_indices, R, U, V, k, BATCH_SIZE)
-
-    # the term `tf.reduce_sum(U**2)` without passing an axis parameter sums up all the elements of matrix U**2.
-    # Return value is a scalar.
-    reg = (tf.reduce_sum((stacked_U)**2) + 
-           tf.reduce_sum((stacked_V)**2) + 
-           tf.reduce_sum((X_UV**2))) / (BATCH_SIZE*k)
-    
-    # the term `tf.multiply(stacked_U, stacked_V)` is elementwise multiplication.
-    # Applying tf.reduce_sum(M, axis=1)--where M is a matrix--will sum all rows and return a column vector.
-    # R_pred is a column vector of ratings corresponding to R_indices
-    
-    lin = tf.reduce_sum(tf.multiply(stacked_U, stacked_V), axis=1) 
-    
-    # ...........................................................
-    
-    xft = X_UV[0,0] * stacked_U[:,0] * stacked_V[:,0]
-    for p in range(k):
-        for q in range(k):
-            xft += X_UV[p,q] * stacked_U[:,p] * stacked_V[:,q]
-    # ...........................................................
-
-    R_pred = tf.sigmoid(lin + xft)
-    
-    coeff = cui + (1 - cui) * R
-    # loss: L2-norm of difference btw actual and predicted ratings
-    loss = tf.sqrt(tf.reduce_sum(coeff * (R - R_pred)**2)/BATCH_SIZE) + LAMBDA * reg
-
-    # Define train op.
-    train = tf.train.AdamOptimizer(learning_rate=lr).minimize(loss)
-    
-    return train, loss, reg, R_indices, R, U, V, R_pred, X_UV
-
-# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # 
-# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # 
-
-def train_the_model(R_indices, R, train_R_indices, train_R, BATCH_SIZE, 
-               NUM_EPOCHS, LAMBDA, k, lr, 
-               train, loss, reg, U, V, X_UV, R_pred,
-               cv_R, cv_R_indices, test_R, test_R_indices):
     start = time.time()
     n_batches = len(train_R) // BATCH_SIZE
     init = tf.global_variables_initializer()
-    batch = Batch(train_R_indices, train_R, BATCH_SIZE=BATCH_SIZE)
+    batch = Batch(train_R_indices, train_R, n_investors, n_input, BATCH_SIZE=BATCH_SIZE)
     _loss, _reg, batch_no = 0, 0, 0
     mae_train_arr, mae_cv_arr , mae_test_arr, loss_arr = [], [], [], []
-
+    
     best_save_score = -np.inf
     
-    if 'out.txt' in os.listdir(): 
-        os.remove('out.txt')
-    f_out = open('out.txt', 'a+') # append to file
-    dp = 'NUM_EPOCHS: {}\nLAMBDA: {}\nk: {}\nlr: {}\nn_batches: {}\nBATCH_SIZE: {}'.format(\
-                                            NUM_EPOCHS, LAMBDA, k, lr, n_batches, BATCH_SIZE)
-    f_out.write(dp)
-    print(dp)
+    print('NUM_EPOCHS: {}\nLAMBDA: {}\nlr: {}\nn_batches: {}\nBATCH_SIZE: {}'.format(\
+                                            NUM_EPOCHS, LAMBDA, lr, n_batches, BATCH_SIZE))
     
     # Add ops to save and restore all the variables.
     saver = tf.train.Saver()
-    
-    print('start SGD iterations...')
     
     with tf.Session() as sess:
         sess.run(init)
         epoch_end = time.time()
         while not (batch.epoch == NUM_EPOCHS and batch.last_batch == True):
-            batch_R_indices, batch_R = batch.next()
+            batch_X, batch_y = batch.next()
+            if batch.i0 == 0:
+                print('Epoch %d %s' % (batch.epoch, '_'*73))
+                
             if not batch.broken:
                 batch_no += 1
-                _, _batch_loss, _batch_reg = sess.run([train, loss, reg], 
-                                        feed_dict={R_indices: batch_R_indices, R: batch_R})
+                _, _batch_loss = sess.run([train, loss], feed_dict={X: batch_X, y: batch_y})
                 _loss += _batch_loss
-                _reg += _batch_reg
-                print("batch_no: {}, _loss estimate: {:6.4f}, t={:6.2f} sec".format(
+                
+                print("batch_no: {}, _loss estimate: {:6.4f}, t={:6.1f} sec".format(
                         batch_no, _loss/batch_no, time.time()-epoch_end), end='\r') 
             
             if batch.last_batch:  
                 # fetch the mae's
-                _, _mae_train = evaluate_preds_and_mae(sess, train_R, train_R_indices, R_pred, R_indices, R, BATCH_SIZE)
-                preds_cv, _mae_cv = evaluate_preds_and_mae(sess, cv_R, cv_R_indices, R_pred, R_indices, R, BATCH_SIZE)
-                preds_test, _mae_test = evaluate_preds_and_mae(sess, test_R, test_R_indices, R_pred, R_indices, R, BATCH_SIZE)
+                print('\nEvaluating MAE on training set...', end='\r')
+                ev_start = time.time()
+                preds_train, _mae_train = evaluate_preds_and_mae(
+                                    sess, train_R, train_R_indices, n_investors, n_input, y_pred, X, y, BATCH_SIZE)
+                print('Evaluating MAE on cv set...      ', end='\r')
+                preds_cv, _mae_cv = evaluate_preds_and_mae(
+                                    sess, cv_R, cv_R_indices, n_investors, n_input, y_pred, X, y, BATCH_SIZE)
+                print('Evaluating MAE on test set...    ', end='\r')
+                preds_test, _mae_test = evaluate_preds_and_mae(
+                                    sess, test_R, test_R_indices, n_investors, n_input, y_pred, X, y, BATCH_SIZE)
                 
+                # threshold=0.7 <== an important parameter !!!
                 _, _, _precision_cv, _recall_cv, _f1_score_cv, _ = return_ROC_statistics(preds_cv, cv_R, threshold=.7)
                 
                 mae_train_arr.append(_mae_train)
@@ -339,16 +303,11 @@ def train_the_model(R_indices, R, train_R_indices, train_R, BATCH_SIZE,
                 mean_preds = np.mean(preds_cv)
                 
                 # printing....
-                dp = '\nmae_train: %6.4f, **mae_cv: %6.4f**, mae_test: %6.4f,  mean(preds_cv): %6.4f' % \
-                      (_mae_train, _mae_cv, _mae_test, np.mean(preds_cv))
-                f_out.write(dp)
-                print(dp, end = '')
-                
-                #dp = '(_reg/_loss) fraction: %6.4f' % (_reg/_loss)
-                #f_out.write(dp)
-                #print(dp)
+                print('\nmae_train: %6.4f, **mae_cv: %6.4f**, mae_test: %6.4f,  mean(preds_cv): %6.4f, ' % \
+                      (_mae_train, _mae_cv, _mae_test, np.mean(preds_cv)), end = '')
                 
                 # resetting some iteration variables....
+                _loss_S = _loss
                 batch_no, _loss, _reg = 0, 0, 0
                 
                 epoch_end = time.time()
@@ -361,7 +320,7 @@ def train_the_model(R_indices, R, train_R_indices, train_R, BATCH_SIZE,
                 
                 print(', f1_score: {:6.4f}'.format(_f1_score_cv))
                 
-    f_out.close()
+    print()
     return mae_train_arr, mae_cv_arr, mae_test_arr, loss_arr
     
     
