@@ -6,33 +6,31 @@ import time
 import os
 import matplotlib.pylab as pylab
 from matplotlib.ticker import MaxNLocator
-from sklearn.metrics import precision_recall_fscore_support as prf_score
 
 # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # 
 # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # 
 
 def return_ROC_statistics(y_pred, y_true, threshold=np.linspace(0,1,26)):
-    recall, f1, fpr, accuracy, precision = [], [], [], [], []
+    recall, f1_score, fpr, accuracy, precision = [], [], [], [], []
     
     if not hasattr(threshold, '__iter__'):
         threshold = [threshold]
         
-        
     for t in threshold:
         y_pred_01  = threshold_rounder(y_pred, threshold=t)
         
-        acc_, pre_, rec_, f1_, fpr_ = confusion_matrix(y_true[:len(y_pred)], y_pred_01)
+        acc_, pre_, rec_, f1_score_, fpr_ = confusion_matrix(y_true[:len(y_pred)], y_pred_01)
         
         accuracy.append(acc_)
         precision.append(pre_)
         recall.append(rec_)
-        f1.append(f1_)
+        f1_score.append(f1_score_)
         fpr.append(fpr_)
         
     if len(threshold) == 1:
-        return y_pred_01, acc_, pre_, rec_, f1_, fpr_
+        return y_pred_01, acc_, pre_, rec_, f1_score_, fpr_
     else:
-        return y_pred_01, accuracy, precision, recall, f1, fpr
+        return y_pred_01, accuracy, precision, recall, f1_score, fpr
 
 # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # 
 # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # 
@@ -145,7 +143,7 @@ def shuffler(a,b):
 class Batch(object):
     def __init__(self, R_indices, R, BATCH_SIZE):
         self.R_indices = R_indices
-        self.R_values = R
+        self.R = R
         self.BATCH_SIZE = BATCH_SIZE
         self.i0 = np.inf
         self.i1 = np.inf
@@ -154,7 +152,7 @@ class Batch(object):
         self.last_batch = False
 
     def next(self):
-        if self.i1 >= len(self.R_values):
+        if self.i1 >= len(self.R):
             # new epoch.
             self.epoch += 1
             self.broken = False
@@ -165,14 +163,14 @@ class Batch(object):
             print('Epoch %d %s' % (self.epoch, '_'*73))
         else:
             self.i0 = self.i0 + self.BATCH_SIZE
-            self.i1 = min(self.i0 + self.BATCH_SIZE, len(self.R_values))
+            self.i1 = min(self.i0 + self.BATCH_SIZE, len(self.R))
             if self.i1 - self.i0 < self.BATCH_SIZE:
                 # broken batch.
                 self.broken = True
-            if self.i1 == len(self.R_values):
+            if self.i1 == len(self.R):
                 self.last_batch = True
         #
-        return self.R_indices[self.i0:self.i1], self.R_values[self.i0:self.i1]
+        return self.R_indices[self.i0:self.i1], self.R[self.i0:self.i1]
 
 # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # 
 # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # 
@@ -235,15 +233,15 @@ def get_stacked_UV(R_indices, R, U, V, k, BATCH_SIZE):
 # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # 
 # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # 
 
-def construct_graph(LAMBDA=0, k=10, lr=0.001, BATCH_SIZE=256, n_users=138493, n_movies=27278, cui = 0.1):
+def construct_graph(LAMBDA=0, k=10, lr=0.001, BATCH_SIZE=256, n_investors=41838, n_startups=64764, cui=0.1):
 
     R = tf.placeholder(dtype=tf.float32, shape=(BATCH_SIZE,))
     R_indices = tf.placeholder(dtype=tf.int32, shape=(BATCH_SIZE,2))
     
     # initialization of U and V is critical. 
     # set mean=np.sqrt(mu/k), where mu ~ 3 or 3.5
-    U = tf.Variable(tf.truncated_normal(shape=(n_users,k), mean=np.sqrt(3.5/k), stddev=0.2), dtype=tf.float32)
-    V = tf.Variable(tf.truncated_normal(shape=(n_movies,k), mean=np.sqrt(3.5/k), stddev=0.2), dtype=tf.float32)
+    U = tf.Variable(tf.truncated_normal(shape=(n_investors,k), mean=np.sqrt(3.5/k), stddev=0.2), dtype=tf.float32)
+    V = tf.Variable(tf.truncated_normal(shape=(n_startups,k), mean=np.sqrt(3.5/k), stddev=0.2), dtype=tf.float32)
 
     # weights for cross-features
     X_UV = tf.Variable(tf.truncated_normal(shape=(k,k), mean=0, stddev=0.2), dtype=tf.float32)
@@ -283,6 +281,8 @@ def construct_graph(LAMBDA=0, k=10, lr=0.001, BATCH_SIZE=256, n_users=138493, n_
     
     return train, loss, reg, R_indices, R, U, V, R_pred, X_UV
 
+# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # 
+# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # 
 
 def train_the_model(R_indices, R, train_R_indices, train_R, BATCH_SIZE, 
                NUM_EPOCHS, LAMBDA, k, lr, 
@@ -318,22 +318,20 @@ def train_the_model(R_indices, R, train_R_indices, train_R, BATCH_SIZE,
             if not batch.broken:
                 batch_no += 1
                 # _bl: batch loss, _br: batch regularization term
-                
-                _, _bl, _br = sess.run([train, loss, reg], 
+                _, _bloss, _breg = sess.run([train, loss, reg], 
                                         feed_dict={R_indices: batch_R_indices, R: batch_R})
-                
-                _loss += _bl
-                _reg += _br
+                _loss += _bloss
+                _reg += _breg
                 print("batch_no: {}, _loss estimate: {:6.4f}, t={:6.2f} sec".format(
                         batch_no, _loss/batch_no, time.time()-epoch_end), end='\r') 
             
-            if batch.last_batch: 
+            if batch.last_batch:  
                 # fetch the mae's
                 _, _mae_train = evaluate_preds_and_mae(sess, train_R, train_R_indices, R_pred, R_indices, R, BATCH_SIZE)
                 preds_cv, _mae_cv = evaluate_preds_and_mae(sess, cv_R, cv_R_indices, R_pred, R_indices, R, BATCH_SIZE)
                 preds_test, _mae_test = evaluate_preds_and_mae(sess, test_R, test_R_indices, R_pred, R_indices, R, BATCH_SIZE)
                 
-                _, _, _precision_cv, _recall_cv, _f1_cv, _ = return_ROC_statistics(preds_cv, cv_R, threshold=.5)
+                _, _, _precision_cv, _recall_cv, _f1_score_cv, _ = return_ROC_statistics(preds_cv, cv_R, threshold=.7)
                 
                 mae_train_arr.append(_mae_train)
                 mae_cv_arr.append(_mae_cv)
@@ -358,14 +356,12 @@ def train_the_model(R_indices, R, train_R_indices, train_R, BATCH_SIZE,
                 epoch_end = time.time()
                 
                 # Save model if recall_cv has reached a minimum.
-                
-                if (_f1_cv > best_save_score):
-                    best_save_score = _f1_cv
+                if (_f1_score_cv > best_save_score):
+                    best_save_score = _f1_score_cv
                     save_path = saver.save(sess, "saved_models/best_model.ckpt")
-                    print(',  CHECKPOINT!! f1_score:{:6.4f}'.format(_f1_cv), end='')
-                else: 
-                    print(',  f1:{:6.4f}'.format(_f1_cv), end='')
-                print()
+                    print(',  CHECKPOINT!!', end='')
+                
+                print(', f1_score: {:6.4f}'.format(_f1_score_cv))
                 
     f_out.close()
     return mae_train_arr, mae_cv_arr, mae_test_arr, loss_arr
