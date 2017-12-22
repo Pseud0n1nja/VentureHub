@@ -78,15 +78,13 @@ def print_runtime(start, p_flag=True):
 # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # 
 # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # 
 
-def plotter(mae_train_arr, mae_cv_arr, mae_test_arr, loss_arr, BATCH_SIZE):
+def plotter(mae_cv_arr, loss_arr, BATCH_SIZE):
     fig = plt.figure()
     ax1 = fig.add_subplot(121)
     ax2 = fig.add_subplot(122)
 
-    n_epoch = len(mae_train_arr)
-    ax1.plot(range(1, n_epoch+1), mae_test_arr, 'bd-', alpha=.6);
+    n_epoch = len(mae_cv_arr)
     ax1.plot(range(1, n_epoch+1), mae_cv_arr, 'rd-', alpha=.6);
-    ax1.plot(range(1, n_epoch+1), mae_train_arr, 'kd-', alpha=.6);
     ax1.set_xlim(left=1);
     #ax1.set_ylim(0.5, 0.65)
     i_min = np.argmin(mae_cv_arr)
@@ -160,15 +158,16 @@ class Batch(object):
             # reset the counter. 
             self.i0 = 0
             self.i1 = self.i0 + self.BATCH_SIZE
-            print('Epoch %d %s' % (self.epoch, '_'*73))
+            #print('Epoch %d %s' % (self.epoch, '_'*43))
         else:
             self.i0 = self.i0 + self.BATCH_SIZE
             self.i1 = min(self.i0 + self.BATCH_SIZE, len(self.R))
-            if self.i1 - self.i0 < self.BATCH_SIZE:
-                # broken batch.
-                self.broken = True
             if self.i1 == len(self.R):
                 self.last_batch = True
+            if self.i1 - self.i0 < self.BATCH_SIZE:
+                self.broken = True
+                return None, None
+
         #
         return self.R_indices[self.i0:self.i1], self.R[self.i0:self.i1]
 
@@ -187,29 +186,6 @@ def evaluate_preds_and_mae(sess, cv_R, cv_R_indices, R_pred, R_indices, R, BATCH
     mae = np.mean(np.abs(cv_R[:i1] - preds))
     
     return preds, mae
-
-# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # 
-# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # 
-
-def npy_read_data():
-    print('Reading train_*.npy , cv_*.npy , test_*.npy files....')
-    
-    with open('data/train_R_indices.npy', 'rb') as f:
-        train_R_indices = np.load(f)
-    with open('data/train_R.npy', 'rb') as f:
-        train_R = np.load(f)
-
-    with open('data/cv_R_indices.npy', 'rb') as f:
-        cv_R_indices = np.load(f)
-    with open('data/cv_R.npy', 'rb') as f:
-        cv_R = np.load(f)
-
-    with open('data/test_R_indices.npy', 'rb') as f:
-        test_R_indices = np.load(f)
-    with open('data/test_R.npy', 'rb') as f:
-        test_R = np.load(f)
-
-    return train_R_indices, train_R, cv_R_indices, cv_R, test_R_indices, test_R
 
 # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # 
 # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # 
@@ -249,7 +225,13 @@ def construct_graph(LAMBDA=0, k=10, lr=0.001, BATCH_SIZE=256, n_investors=41838,
     #.............................................. 
     
     stacked_U, stacked_V = get_stacked_UV(R_indices, R, U, V, k, BATCH_SIZE)
-
+    
+    # non-linear terms: np.multiply(U[i,:], V[j,:])**2
+    u_cdot_v_square = tf.square(tf.multiply(stacked_U, stacked_V)) 
+    nonlin = tf.reduce_sum(u_cdot_v_square, axis=1)
+    nonlin=0
+    
+    
     # the term `tf.reduce_sum(U**2)` without passing an axis parameter sums up all the elements of matrix U**2.
     # Return value is a scalar.
     reg = (tf.reduce_sum((stacked_U)**2) + 
@@ -270,7 +252,7 @@ def construct_graph(LAMBDA=0, k=10, lr=0.001, BATCH_SIZE=256, n_investors=41838,
             xft += X_UV[p,q] * stacked_U[:,p] * stacked_V[:,q]
     # ...........................................................
 
-    R_pred = tf.sigmoid(lin + xft)
+    R_pred = tf.sigmoid(lin + xft + nonlin)
     
     coeff = cui + (1 - cui) * R
     # loss: L2-norm of difference btw actual and predicted ratings
@@ -287,23 +269,19 @@ def construct_graph(LAMBDA=0, k=10, lr=0.001, BATCH_SIZE=256, n_investors=41838,
 def train_the_model(R_indices, R, train_R_indices, train_R, BATCH_SIZE, 
                NUM_EPOCHS, LAMBDA, k, lr, 
                train, loss, reg, U, V, X_UV, R_pred,
-               cv_R, cv_R_indices, test_R, test_R_indices):
+               cv_R, cv_R_indices, test_R, test_R_indices, threshold=0.8):
+    
     start = time.time()
     n_batches = len(train_R) // BATCH_SIZE
     init = tf.global_variables_initializer()
     batch = Batch(train_R_indices, train_R, BATCH_SIZE=BATCH_SIZE)
     _loss, _reg, batch_no = 0, 0, 0
-    mae_train_arr, mae_cv_arr , mae_test_arr, loss_arr = [], [], [], []
+    mae_cv_arr , loss_arr = [], []
 
     best_save_score = -np.inf
     
-    if 'out.txt' in os.listdir(): 
-        os.remove('out.txt')
-    f_out = open('out.txt', 'a+') # append to file
-    dp = 'NUM_EPOCHS: {}\nLAMBDA: {}\nk: {}\nlr: {}\nn_batches: {}\nBATCH_SIZE: {}'.format(\
-                                            NUM_EPOCHS, LAMBDA, k, lr, n_batches, BATCH_SIZE)
-    f_out.write(dp)
-    print(dp)
+    print('NUM_EPOCHS: {}\nLAMBDA: {}\nk: {}\nlr: {}\nn_batches: {}\nBATCH_SIZE: {}'.format(\
+                                            NUM_EPOCHS, LAMBDA, k, lr, n_batches, BATCH_SIZE))
     
     # Add ops to save and restore all the variables.
     saver = tf.train.Saver()
@@ -315,10 +293,13 @@ def train_the_model(R_indices, R, train_R_indices, train_R, BATCH_SIZE,
         epoch_end = time.time()
         while not (batch.epoch == NUM_EPOCHS and batch.last_batch == True):
             batch_R_indices, batch_R = batch.next()
+            if batch.i0 == 0:
+                print('Epoch %d %s' % (batch.epoch, '_'*43))
+            
             if not batch.broken:
                 batch_no += 1
                 _, _batch_loss, _batch_reg = sess.run([train, loss, reg], 
-                                        feed_dict={R_indices: batch_R_indices, R: batch_R})
+                                                    feed_dict={R_indices: batch_R_indices, R: batch_R})
                 _loss += _batch_loss
                 _reg += _batch_reg
                 print("batch_no: {}, _loss estimate: {:6.4f}, t={:6.2f} sec".format(
@@ -326,33 +307,21 @@ def train_the_model(R_indices, R, train_R_indices, train_R, BATCH_SIZE,
             
             if batch.last_batch:  
                 # fetch the mae's
-                print('\nEvaluating MAE on training set...', end='\r')
-                _, _mae_train = evaluate_preds_and_mae(sess, train_R, train_R_indices, R_pred, R_indices, R, BATCH_SIZE)
-                print('Evaluating MAE on cv set...        ', end='\r')
-                preds_cv, _mae_cv = evaluate_preds_and_mae(sess, cv_R, cv_R_indices, R_pred, R_indices, R, BATCH_SIZE)
-                print('Evaluating MAE on test set...       ', end='\r')
-                preds_test, _mae_test = evaluate_preds_and_mae(sess, test_R, test_R_indices, R_pred, R_indices, R, BATCH_SIZE)
+                print('\nEvaluating MAE on cv set... '+' '*30, end='\r')
+                preds_cv, _mae_cv = evaluate_preds_and_mae(
+                                            sess, cv_R, cv_R_indices, R_pred, R_indices, R, BATCH_SIZE)
                 
                 # threshold=0.7 <== an important parameter !!!
-                print('Calculating ROC curve              ', end='\r')
-                _, _, _precision_cv, _recall_cv, _f1_score_cv, _ = return_ROC_statistics(preds_cv, cv_R, threshold=.7)
+                print('Calculating ROC curve threshold: %3.1f' % (threshold,), end='\r')
+                _, _, _precision_cv, _recall_cv, _f1_score_cv, _ = return_ROC_statistics(preds_cv, cv_R, threshold=threshold)
                 print('                                   ', end='\r')
 
-                mae_train_arr.append(_mae_train)
                 mae_cv_arr.append(_mae_cv)
-                mae_test_arr.append(_mae_test)
                 loss_arr.append(_loss/n_batches)
                 mean_preds = np.mean(preds_cv)
                 
                 # printing....
-                dp = '\nmae_train: %6.4f, **mae_cv: %6.4f**, mae_test: %6.4f,  mean(preds_cv): %6.4f' % \
-                      (_mae_train, _mae_cv, _mae_test, np.mean(preds_cv))
-                f_out.write(dp)
-                print(dp, end = '')
-                
-                #dp = '(_reg/_loss) fraction: %6.4f' % (_reg/_loss)
-                #f_out.write(dp)
-                #print(dp)
+                print('**mae_cv: %6.4f**' % (_mae_cv,), end = '')
                 
                 # resetting some iteration variables....
                 batch_no, _loss, _reg = 0, 0, 0
@@ -362,13 +331,12 @@ def train_the_model(R_indices, R, train_R_indices, train_R, BATCH_SIZE,
                 # Save model if recall_cv has reached a minimum.
                 if (_f1_score_cv > best_save_score):
                     best_save_score = _f1_score_cv
-                    save_path = saver.save(sess, "saved_models/best_model.ckpt")
-                    print(',  CHECKPOINT!!', end='')
+                    save_path = saver.save(sess, "saved_models/MF_models/best_model.ckpt")
+                    print(', CHECKPOINT!!', end='')
                 
-                print(', f1_score: {:6.4f}'.format(_f1_score_cv))
-                
-    f_out.close()
-    return mae_train_arr, mae_cv_arr, mae_test_arr, loss_arr
+                print(', f1_score_cv: {:6.4f}'.format(_f1_score_cv))
+    print()            
+    return mae_cv_arr, loss_arr
     
     
     
