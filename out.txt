@@ -1,5 +1,0 @@
-NUM_EPOCHS: 1
-LAMBDA: 0.0
-lr: 0.01
-n_batches: 966
-BATCH_SIZE: 256
